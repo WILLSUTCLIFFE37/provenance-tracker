@@ -1,0 +1,4 @@
+captured_at,time_period,tvl_usd,trading_tvl_usd,total_participants,total_committed_value_usd,total_loan_balance_usd,total_loans,chain_transactions,chain_fees_usd,loan_amount_funded_usd,loans_funded,loan_amount_paid_usd,loans_paid,scrape_status,error_message
+2026-03-10T11:21:26Z,3m,22410000000.0,627390000.0,71661.0,627010000.0,16510000000.000002,423000.0,,,,,,,ok,
+2026-03-10T11:21:26Z,1m,22410000000.0,627390000.0,71661.0,627010000.0,16510000000.000002,423000.0,,,,,,,ok,
+2026-03-10T11:21:26Z,1w,22410000000.0,627390000.0,71661.0,627010000.0,16510000000.000002,423000.0,,,,,,,ok,
