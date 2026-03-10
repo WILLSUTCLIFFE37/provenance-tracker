@@ -1,8 +1,7 @@
 """
 Provenance Pulse Scraper
-Clicks 3m / 1m / 1w on the PROVENANCE BLOCKCHAIN METRICS selector
-(the second/lower selector on the page — not the Hash Metrics one at the top)
-and appends all 12 metrics to provenance_pulse.csv.
+Targets the SECOND time-period selector (Provenance Blockchain Metrics)
+by finding its parent container and clicking within it directly.
 """
 
 import re
@@ -38,13 +37,6 @@ LABEL_MAP = {
     "loans funded":             "loans_funded",
     "loan amount paid":         "loan_amount_paid_usd",
     "loans paid":               "loans_paid",
-}
-
-# Map our keys to the button text visible on the page
-PERIOD_BUTTON_TEXT = {
-    "3m": ["3m", "3M"],
-    "1m": ["1m", "1M"],
-    "1w": ["1w", "1W"],
 }
 
 
@@ -84,21 +76,18 @@ def append_row(row: dict):
 
 
 async def extract_metrics_from_section(page) -> dict:
-    """Extract metrics from the Provenance Blockchain Metrics section only."""
+    """Parse only the Provenance Blockchain Metrics section of the page."""
     body_text = await page.inner_text("body")
     lines = [l.strip() for l in body_text.split("\n") if l.strip()]
 
-    # Find the start of the Provenance Blockchain Metrics section
-    # so we only parse lines below that heading
+    # Start parsing from the Blockchain Metrics heading
     section_start = 0
     for i, line in enumerate(lines):
         if "provenance blockchain metrics" in line.lower():
             section_start = i
             break
 
-    # Only parse lines from that section onwards
     relevant_lines = lines[section_start:]
-
     metrics = {}
     i = 0
     while i < len(relevant_lines):
@@ -116,52 +105,88 @@ async def extract_metrics_from_section(page) -> dict:
     return metrics
 
 
-async def click_blockchain_period(page, period: str) -> bool:
+async def find_blockchain_selector(page):
     """
-    Click the period button in the SECOND selector group (Provenance Blockchain Metrics).
-    The page has two identical 24h/1w/1m/3m selectors — we want the lower one.
-    Strategy: find ALL matching buttons and click the LAST one.
+    Find the time-period selector that belongs to the
+    Provenance Blockchain Metrics section.
+    Returns the element handle of the selector container, or None.
     """
-    for label in PERIOD_BUTTON_TEXT[period]:
-        try:
-            # get_by_role finds all buttons with this text — .last targets the second selector
-            btn = page.get_by_role("button", name=re.compile(f"^{re.escape(label)}$", re.IGNORECASE))
-            count = await btn.count()
-            if count >= 2:
-                await btn.last.click()
-                print(f"[Scraper] Clicked [{period}] — button {count}/{count} (Blockchain Metrics selector)")
-                return True
-            elif count == 1:
-                # Only one found — still click it
-                await btn.last.click()
-                print(f"[Scraper] Clicked [{period}] — only 1 button found, clicking it")
-                return True
-        except Exception as e:
-            print(f"[Scraper] role=button attempt failed: {e}")
+    # Strategy: find all selector-like containers (groups of short buttons
+    # containing 24h/1w/1m/3m), then return the LAST one.
+    selector_container = await page.evaluate_handle("""
+        () => {
+            // Look for any container that has children whose text is exactly
+            // one of: 24h, 1w, 1m, 3m
+            const periodTexts = new Set(['24h','1w','1m','3m']);
+            const candidates = [];
 
-        # Fallback: query all elements with matching text, click the last one
-        try:
-            for tag in ("button", "span", "div", "li", "a"):
-                els = await page.query_selector_all(f"{tag}:has-text('{label}')")
-                matching = []
-                for el in els:
-                    txt = (await el.inner_text()).strip()
-                    if txt.lower() == label.lower():
-                        matching.append(el)
-                if len(matching) >= 1:
-                    await matching[-1].click()  # last = Blockchain Metrics selector
-                    print(f"[Scraper] Clicked [{period}] via last <{tag}> matching '{label}' ({len(matching)} found)")
-                    return True
-        except Exception as e:
-            print(f"[Scraper] fallback attempt failed: {e}")
+            // Walk all elements and find those that contain period buttons
+            const all = document.querySelectorAll('*');
+            for (const el of all) {
+                const children = Array.from(el.children);
+                const childTexts = children.map(c => c.innerText?.trim().toLowerCase());
+                const matchCount = childTexts.filter(t => periodTexts.has(t)).length;
+                if (matchCount >= 3) {
+                    candidates.push(el);
+                }
+            }
+            // Return the last candidate (Blockchain Metrics selector)
+            return candidates.length > 0 ? candidates[candidates.length - 1] : null;
+        }
+    """)
+    return selector_container
 
-    print(f"[Scraper] WARNING: Could not find period button for [{period}]")
-    return False
+
+async def click_period_in_blockchain_selector(page, period: str) -> bool:
+    """
+    Click the period button INSIDE the Provenance Blockchain Metrics selector.
+    Uses JS to find the second/last selector container and click within it.
+    """
+    label_lower = period.lower()  # "3m", "1m", "1w"
+
+    clicked = await page.evaluate(f"""
+        () => {{
+            const periodTexts = new Set(['24h','1w','1m','3m']);
+            const target = '{label_lower}';
+            const candidates = [];
+
+            // Find all selector containers
+            const all = document.querySelectorAll('*');
+            for (const el of all) {{
+                const children = Array.from(el.children);
+                const childTexts = children.map(c => c.innerText?.trim().toLowerCase());
+                const matchCount = childTexts.filter(t => periodTexts.has(t)).length;
+                if (matchCount >= 3) {{
+                    candidates.push(el);
+                }}
+            }}
+
+            if (candidates.length === 0) return 'no_selector_found';
+
+            // Use the LAST container = Blockchain Metrics selector
+            const blockchainSelector = candidates[candidates.length - 1];
+
+            // Find the button matching our target period
+            const children = Array.from(blockchainSelector.querySelectorAll('*'));
+            for (const child of children) {{
+                if (child.innerText?.trim().toLowerCase() === target) {{
+                    child.click();
+                    return `clicked_${{target}}_in_container_${{candidates.length - 1}}_of_${{candidates.length}}`;
+                }}
+            }}
+
+            return 'button_not_found_in_container';
+        }}
+    """)
+
+    print(f"[Scraper] [{period}] JS click result: {clicked}")
+    return "clicked" in str(clicked)
 
 
 async def scrape_all_periods() -> dict:
     from playwright.async_api import async_playwright
     results = {}
+
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1440, "height": 900})
@@ -171,12 +196,25 @@ async def scrape_all_periods() -> dict:
         await asyncio.sleep(5)
 
         for period in TIME_PERIODS:
-            await click_blockchain_period(page, period)
+            print(f"[Scraper] Selecting period: {period}")
+            clicked = await click_period_in_blockchain_selector(page, period)
+            if not clicked:
+                print(f"[Scraper] WARNING: JS click failed for [{period}], trying Playwright fallback")
+                # Fallback: click the last button with matching text
+                try:
+                    btn = page.get_by_role("button", name=re.compile(f"^{re.escape(period)}$", re.IGNORECASE))
+                    count = await btn.count()
+                    if count > 0:
+                        await btn.last.click()
+                        print(f"[Scraper] Fallback: clicked button {count}/{count}")
+                except Exception as e:
+                    print(f"[Scraper] Fallback also failed: {e}")
+
             await asyncio.sleep(3)
 
             metrics = await extract_metrics_from_section(page)
             found = sum(1 for v in metrics.values() if v is not None)
-            print(f"[Scraper] [{period}] {found}/12 metrics found: {metrics}")
+            print(f"[Scraper] [{period}] {found}/12 metrics: {metrics}")
             results[period] = metrics
 
         await browser.close()
