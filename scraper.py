@@ -1,9 +1,6 @@
 """
 Provenance Pulse Scraper
-Handles all time-period label variants:
-  3m: "3 Months Chain Transactions"
-  1m: "Month's Chain Transactions"  
-  1w: "Week's Chain Transactions"
+Captures 24h / 1w / 1m / 3m from the Provenance Blockchain Metrics section.
 """
 
 import re
@@ -13,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CSV_PATH = Path("provenance_pulse.csv")
-TIME_PERIODS = ["3m", "1m", "1w"]
+TIME_PERIODS = ["24h", "3m", "1m", "1w"]
 
 FIELDNAMES = [
     "captured_at", "time_period",
@@ -41,11 +38,11 @@ LABEL_MAP = {
     "loans paid":               "loans_paid",
 }
 
-# Maps period key → the exact button text visible on the page
 PERIOD_BUTTON_TEXT = {
-    "3m": "3m",
-    "1m": "1m",
-    "1w": "1w",
+    "24h": "24h",
+    "3m":  "3m",
+    "1m":  "1m",
+    "1w":  "1w",
 }
 
 
@@ -65,25 +62,10 @@ def parse_value(text: str):
 
 
 def normalise_label(raw: str) -> str:
-    """
-    Strip ALL time-period prefixes so labels match LABEL_MAP keys.
-
-    Handles:
-      "3 Months Chain Transactions"  -> "chain transactions"
-      "3 Months Loan Amount Funded"  -> "loan amount funded"
-      "Month's Chain Fees"           -> "chain fees"
-      "Month's Loans Funded"         -> "loans funded"
-      "Week's Chain Transactions"    -> "chain transactions"
-      "Week's Loan Amount Paid"      -> "loan amount paid"
-    """
     s = raw.lower().strip()
-
-    # Remove patterns like: "3 months ", "3months", "1 month ", "1week "
     s = re.sub(r"^\d+\s*(months?|weeks?|days?|hours?)\s*", "", s)
-
-    # Remove possessive patterns like: "month's ", "week's ", "months' "
-    s = re.sub(r"^(months?'s?|weeks?'s?|days?'s?)\s*", "", s)
-
+    s = re.sub(r"^(months?'s?|weeks?'s?|days?'s?|today's?)\s*", "", s)
+    s = re.sub(r"^24h\s*", "", s)
     return s.strip()
 
 
@@ -102,7 +84,6 @@ def append_row(row: dict):
 
 
 async def extract_metrics_from_section(page) -> dict:
-    """Parse only lines below the 'Provenance Blockchain Metrics' heading."""
     body_text = await page.inner_text("body")
     lines = [l.strip() for l in body_text.split("\n") if l.strip()]
 
@@ -113,7 +94,6 @@ async def extract_metrics_from_section(page) -> dict:
             break
 
     relevant_lines = lines[section_start:]
-
     metrics = {}
     i = 0
     while i < len(relevant_lines):
@@ -132,18 +112,11 @@ async def extract_metrics_from_section(page) -> dict:
 
 
 async def click_blockchain_period(page, period: str) -> bool:
-    """
-    Use JavaScript to find all period-selector containers on the page,
-    take the LAST one (Blockchain Metrics), and click the target period within it.
-    """
-    target = PERIOD_BUTTON_TEXT[period]  # "3m", "1m", or "1w"
+    target = PERIOD_BUTTON_TEXT[period]
 
     result = await page.evaluate(f"""
         () => {{
             const target = '{target}';
-
-            // Find every element whose DIRECT children include buttons/spans
-            // with text matching the four period options
             const periodSet = new Set(['24h', '1w', '1m', '3m']);
             const containers = [];
 
@@ -157,30 +130,25 @@ async def click_blockchain_period(page, period: str) -> bool:
                 }}
             }}
 
-            if (containers.length === 0) {{
-                return 'ERROR: no selector containers found';
-            }}
+            if (containers.length === 0) return 'ERROR: no selector containers found';
 
-            // The LAST container is the Blockchain Metrics one
             const blockchainContainer = containers[containers.length - 1];
 
-            // Click the child whose text matches our target
             for (const child of blockchainContainer.children) {{
                 if (child.innerText?.trim().toLowerCase() === target) {{
                     child.click();
-                    return `OK: clicked '${{target}}' in container ${{containers.length}} of ${{containers.length}}`;
+                    return `OK: clicked '${{target}}' (direct child, container ${{containers.length}}/${{containers.length}})`;
                 }}
             }}
 
-            // If direct children didn't match, try descendants
             for (const desc of blockchainContainer.querySelectorAll('*')) {{
                 if (desc.innerText?.trim().toLowerCase() === target) {{
                     desc.click();
-                    return `OK: clicked '${{target}}' in descendant of last container`;
+                    return `OK: clicked '${{target}}' (descendant)`;
                 }}
             }}
 
-            return `ERROR: target '${{target}}' not found in last container`;
+            return `ERROR: '${{target}}' not found in last container`;
         }}
     """)
 
