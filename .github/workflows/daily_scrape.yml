@@ -2,11 +2,8 @@ name: Provenance Pulse Daily Scrape
 
 on:
   schedule:
-    # 12:00 UTC = 12:00 UK (GMT) in winter, 11:00 UTC = 12:00 UK (BST) in summer.
-    # We run both times; the scraper is idempotent so a duplicate is harmless.
-    - cron: '0 11 * * *'   # 12:00 BST (summer)
-    - cron: '0 12 * * *'   # 12:00 GMT (winter)
-  workflow_dispatch:        # allows manual "Run workflow" button in GitHub UI
+    - cron: '59 23 * * *'   # 11:59pm UTC every day
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,7 +11,6 @@ permissions:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # Prevent both cron triggers running at once in the overlap period
     concurrency:
       group: daily-scrape
       cancel-in-progress: false
@@ -43,6 +39,5 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add provenance_pulse.csv
-          # Only commit if the file actually changed
           git diff --staged --quiet || git commit -m "data: daily snapshot $(date -u '+%Y-%m-%d %H:%M') UTC"
           git push
